@@ -1,0 +1,52 @@
+name: Monitor Claude Code Action Commits
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Run daily at midnight UTC
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  check_for_new_commits:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # To commit the new SHA file
+      issues: write   # To create an issue if a new commit is found
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Get latest commit SHA from anthropics/claude-code-action
+        id: get_remote_sha # Give an id to this step so we can access its outputs
+        run: |
+          LATEST_SHA=$(curl -s "https://api.github.com/repos/anthropics/claude-code-action/commits/main" | jq -r .sha)
+          echo "Latest remote SHA: $LATEST_SHA"
+          echo "sha=$LATEST_SHA" >> $GITHUB_OUTPUT
+
+      - name: Read previous commit SHA
+        id: get_local_sha
+        run: |
+          PREVIOUS_SHA=$(cat .github/latest-claude-commit.txt || echo "")
+          echo "Previous local SHA: $PREVIOUS_SHA"
+          echo "sha=$PREVIOUS_SHA" >> $GITHUB_OUTPUT
+
+      - name: Compare SHAs and act
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Required for gh issue create and push
+          REMOTE_SHA: ${{ steps.get_remote_sha.outputs.sha }}
+          LOCAL_SHA: ${{ steps.get_local_sha.outputs.sha }}
+        run: |
+          if [ "$REMOTE_SHA" != "$LOCAL_SHA" ]; then
+            echo "New commit found in anthropics/claude-code-action: $REMOTE_SHA"
+            gh issue create --title "New commit detected in anthropics/claude-code-action"                             --body "A new commit has been pushed to anthropics/claude-code-action: $REMOTE_SHA. View commit: https://github.com/anthropics/claude-code-action/commit/$REMOTE_SHA"
+
+            echo $REMOTE_SHA > .github/latest-claude-commit.txt
+
+            git config --global user.name 'github-actions[bot]'
+            git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+            git add .github/latest-claude-commit.txt
+            git commit -m "Update latest known SHA for anthropics/claude-code-action to $REMOTE_SHA"
+            git push
+          else
+            echo "No new commits found in anthropics/claude-code-action."
+          fi
